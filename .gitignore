@@ -7,9 +7,11 @@ __pycache__/
 venv/
 env/
 
-# Credentials and authentication tokens
-credentials/
+# Authentication tokens
 tokens/
+
+# Environment variables
+.env
 
 # IDE files
 .vscode/

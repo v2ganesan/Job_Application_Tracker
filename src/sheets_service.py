@@ -6,6 +6,14 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from datetime import datetime
+from dotenv import load_dotenv
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.database import user_exists, save_new_user, init_database
+
+# Load environment variables
+load_dotenv()
 
 def authenticate_sheets():
     """Authenticate and return Google Sheets service using existing token"""
@@ -26,6 +34,16 @@ def authenticate_sheets():
     service = build('sheets', 'v4', credentials=creds)
     print("✅ Authenticated with Google Sheets")
     return service
+
+def get_user_email(credentials):
+    """Get user email from OAuth credentials"""
+    from googleapiclient.discovery import build
+    
+    # Build OAuth2 service to get user info
+    oauth_service = build('oauth2', 'v2', credentials=credentials)
+    user_info = oauth_service.userinfo().get().execute()
+    
+    return user_info.get('email')
 
 def create_job_tracker_sheet(service):
     """Create a new spreadsheet for job application tracking"""
@@ -150,46 +168,58 @@ def verify_read_access(service, spreadsheet_id):
         return True
 
 def main():
-    """Main function to set up complete Google Sheets integration"""
-    print("🚀 Starting Google Sheets setup for Job Application Tracker...")
+    """Story 2.1: Create Google Sheet for new user with database tracking"""
+    print("🚀 Story 2.1: Checking user status and managing sheets...")
     
-    # Step 1: Authenticate
+    # Initialize database
+    print("📋 Initializing database...")
+    if not init_database():
+        print("❌ Failed to initialize database")
+        return
+    
+    # Step 1: Authenticate and get credentials
     service = authenticate_sheets()
     if not service:
         print("❌ Authentication failed. Make sure to run gmail_auth.py first.")
         return
     
-    # Step 2: Create spreadsheet
-    try:
-        spreadsheet_id, spreadsheet_url = create_job_tracker_sheet(service)
-    except Exception as e:
-        print(f"❌ Failed to create spreadsheet: {e}")
-        return
+    # Load credentials for user info
+    token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tokens', 'token.pickle')
+    with open(token_path, 'rb') as token:
+        credentials = pickle.load(token)
     
-    # Step 3: Setup headers
-    try:
-        setup_sheet_headers(service, spreadsheet_id)
-    except Exception as e:
-        print(f"❌ Failed to setup headers: {e}")
-        return
+    # Step 2: Get user email and check if they exist
+    user_email = get_user_email(credentials)
+    print(f"👤 User: {user_email}")
     
-    # Step 4: Add test data
-    try:
-        add_test_data(service, spreadsheet_id)
-    except Exception as e:
-        print(f"❌ Failed to add test data: {e}")
-        return
-    
-    # Step 5: Verify read access
-    try:
-        verify_read_access(service, spreadsheet_id)
-    except Exception as e:
-        print(f"❌ Failed to verify read access: {e}")
-        return
-    
-    print("\n🎉 Google Sheets integration complete!")
-    print(f"📋 Your Job Application Tracker: {spreadsheet_url}")
-    print("\n✅ Story 2 Complete: The service can now create and manage spreadsheets!")
+    # Step 3: Check if user exists in database (Story 2.1 core logic)
+    if user_exists(user_email):
+        print("📋 Returning user - user already exists in database")
+        print("✅ Story 2.1 Complete: Existing user detected!")
+    else:
+        print("🆕 First-time user - creating new sheet and saving to database")
+        
+        try:
+            # Create new sheet for first-time user
+            spreadsheet_id, spreadsheet_url = create_job_tracker_sheet(service)
+            
+            # Set up headers
+            setup_sheet_headers(service, spreadsheet_id)
+            
+            # Add test data for new user
+            add_test_data(service, spreadsheet_id)
+            
+            # Save user to database
+            if save_new_user(user_email, spreadsheet_id):
+                print(f"✅ Saved new user to database: {user_email}")
+                print(f"📋 Sheet URL: {spreadsheet_url}")
+                print("\n✅ Story 2.1 Complete: Created new sheet for first-time user!")
+            else:
+                print("❌ Failed to save user to database")
+                
+        except Exception as e:
+            print(f"❌ Failed to create sheet for new user: {e}")
+            return
 
 if __name__ == '__main__':
     main()
