@@ -412,8 +412,8 @@ def display_job_emails(job_emails):
                 print()
 
 def main():
-    """Main function to find and display 5 emails from each job category"""
-    print("🔍 Job Application Email Finder - Top 5 Per Category")
+    """Main function to find and display emails from each job category"""
+    print("🔍 Job Application Email Finder")
     print("=" * 60)
     
     # Find job emails (increased limit to get more emails for categorization)
@@ -457,7 +457,7 @@ def main():
             print(f"\n{emoji_map[category]} {category.upper()} EMAILS ({len(emails)} total)")
             print("-" * 40)
             
-            # Show ALL emails from this category
+            # Show ALL emails from each category
             for i, email in enumerate(emails):
                 print(f"{i+1}. From: {email['sender']}")
                 print(f"   Subject: {email['subject']}")
