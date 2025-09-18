@@ -133,8 +133,7 @@ def setup_sheet_headers(service, spreadsheet_id):
     """Add headers to the job tracker spreadsheet"""
     headers = [
         'Company', 'Position', 'Date Applied', 'Status', 
-        'Application Method', 'Contact Person', 'Notes', 
-        'Interview Date', 'Follow-up Date'
+        'Follow-up Date'
     ]
     
     values = [headers]
@@ -142,7 +141,7 @@ def setup_sheet_headers(service, spreadsheet_id):
     
     service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
-        range='A1:I1',
+        range='A1:E1',
         valueInputOption='RAW',
         body=body
     ).execute()
@@ -153,7 +152,7 @@ def setup_sheet_headers(service, spreadsheet_id):
             'repeatCell': {
                 'range': {
                     'sheetId': 0, 'startRowIndex': 0, 'endRowIndex': 1,
-                    'startColumnIndex': 0, 'endColumnIndex': 9
+                    'startColumnIndex': 0, 'endColumnIndex': 5
                 },
                 'cell': {
                     'userEnteredFormat': {'textFormat': {'bold': True}}
