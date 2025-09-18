@@ -83,14 +83,15 @@ def main():
     print("\n📧 Testing Gmail access...")
     service = build('gmail', 'v1', credentials=creds)
 
-    # Get recent messages from inbox
-    results = service.users().messages().list(userId='me', maxResults=5, q='in:inbox').execute()
+    # Get recent messages from primary category only
+    results = service.users().messages().list(userId='me', maxResults=5, q='category:primary').execute()
     messages = results.get('messages', [])
 
     if not messages:
-        print("No messages found in inbox.")
+        print("No messages found in Primary category.")
+        print("Your Gmail might not have tabbed inbox enabled, or no emails are categorized as Primary.")
     else:
-        print("Recent emails from inbox:")
+        print("Recent emails from PRIMARY category only:")
         for msg in messages:
             msg_data = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
             headers = msg_data['payload']['headers']
