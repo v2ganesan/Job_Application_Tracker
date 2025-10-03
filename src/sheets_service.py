@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.database import user_exists, save_new_user, init_database
+from src.database import user_exists, save_new_user, init_database, get_user_sheet_id, update_user_sheet_id
+from src.utils import extract_company, extract_position
+from src.job_email_finder import find_job_emails
 
 # Load environment variables
 load_dotenv()
@@ -35,18 +37,12 @@ def authenticate_sheets():
     print("✅ Authenticated with Google Sheets")
     return service
 
-def get_user_email(credentials):
-    """Get user email from OAuth credentials"""
-    from googleapiclient.discovery import build
-    
-    # Build OAuth2 service to get user info
-    oauth_service = build('oauth2', 'v2', credentials=credentials)
-    user_info = oauth_service.userinfo().get().execute()
-    
-    return user_info.get('email')
 
-def create_job_tracker_sheet(service):
+def create_job_tracker_sheet(credentials):
     """Create a new spreadsheet for job application tracking"""
+    # Build Sheets service
+    service = build('sheets', 'v4', credentials=credentials)
+    
     spreadsheet = {
         'properties': {
             'title': 'Job Application Tracker'
@@ -60,20 +56,13 @@ def create_job_tracker_sheet(service):
     print(f"✅ Created spreadsheet: 'Job Application Tracker'")
     print(f"📋 Spreadsheet URL: {spreadsheet_url}")
     
-    return spreadsheet_id, spreadsheet_url
+    return service, spreadsheet_id, spreadsheet_url
+
 
 def setup_sheet_headers(service, spreadsheet_id):
     """Add headers to the job tracker spreadsheet"""
     headers = [
-        'Company',
-        'Position', 
-        'Date Applied',
-        'Status',
-        'Application Method',
-        'Contact Person',
-        'Notes',
-        'Interview Date',
-        'Follow-up Date'
+        'Company', 'Position', 'Date Applied', 'Status', 'Follow-up Date'
     ]
     
     values = [headers]
@@ -83,7 +72,7 @@ def setup_sheet_headers(service, spreadsheet_id):
     
     result = service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
-        range='A1:I1',
+        range='A1:E1',
         valueInputOption='RAW',
         body=body
     ).execute()
@@ -97,7 +86,7 @@ def setup_sheet_headers(service, spreadsheet_id):
                     'startRowIndex': 0,
                     'endRowIndex': 1,
                     'startColumnIndex': 0,
-                    'endColumnIndex': 9
+                    'endColumnIndex': 5
                 },
                 'cell': {
                     'userEnteredFormat': {
@@ -117,6 +106,45 @@ def setup_sheet_headers(service, spreadsheet_id):
     ).execute()
     
     print(f"✅ Added headers: {' | '.join(headers)}")
+    return result
+
+# Scenario 2: Email-to-Sheet (single email processing)
+def add_job_from_email(service, spreadsheet_id, email_data):
+    """Add a job application from email data to the sheet"""
+    # Extract company name using parent function (tries both sender and subject)
+    company = extract_company(
+        sender=email_data.get('sender'),
+        subject=email_data.get('subject')
+    )
+    position = 'Unknown Position'  # Default since position extraction was removed
+    date_applied = datetime.now().strftime('%Y-%m-%d')  # Use current date
+    status = 'Applied'  # Default status
+    follow_up = ''  # Empty by default
+    
+    # Get next available row - simple implementation
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range='A:A'
+        ).execute()
+        values = result.get('values', [])
+        next_row = len(values) + 1
+    except:
+        next_row = 2  # Default to row 2
+    
+    row_data = [company, position, date_applied, status, follow_up]
+    
+    values = [row_data]
+    body = {'values': values}
+    
+    result = service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f'A{next_row}:E{next_row}',
+        valueInputOption='RAW',
+        body=body
+    ).execute()
+    
+    print(f"✅ Added job application: {company} - {position} ({status})")
     return result
 
 def add_test_data(service, spreadsheet_id):
@@ -152,7 +180,7 @@ def verify_read_access(service, spreadsheet_id):
     """Read data back to verify read permissions"""
     result = service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
-        range='A1:I2'
+        range='A1:E10'  # Read headers plus some data
     ).execute()
     
     values = result.get('values', [])
@@ -167,59 +195,195 @@ def verify_read_access(service, spreadsheet_id):
             print(f"   Test data: {values[1]}")
         return True
 
+def add_application_emails_to_sheet(service, spreadsheet_id, max_emails=20):
+    """
+    Find application emails and add them to the Google Sheet
+    
+    Args:
+        service: Google Sheets service object
+        spreadsheet_id: ID of the spreadsheet to update
+        max_emails: Maximum number of emails to process
+    
+    Returns:
+        dict: Summary of results
+    """
+    print("🔍 Finding job application emails...")
+    
+    # Get job emails using our finder
+    job_emails = find_job_emails(max_results=max_emails)
+    
+    if not job_emails:
+        print("❌ No job emails found.")
+        return {'total': 0, 'applications': 0, 'added': 0}
+    
+    # Filter for application emails only, but also show what categories other emails got
+    application_emails = []
+    other_emails = []
+    
+    for email in job_emails:
+        if email.get('category') == 'application':
+            application_emails.append(email)
+        elif email.get('company') and email.get('company') != 'Unknown Company':
+            other_emails.append(email)
+    
+    # Show what we found
+    if other_emails:
+        print(f"📋 Found {len(other_emails)} other job emails with valid companies:")
+        for email in other_emails[:5]:  # Show first 5
+            print(f"   • {email.get('company')} - Category: {email.get('category')} - Subject: {email.get('subject')[:50]}...")
+    
+    if not application_emails:
+        print("❌ No application emails found.")
+        return {'total': len(job_emails), 'applications': 0, 'added': 0}
+    
+    print(f"✅ Found {len(application_emails)} application emails to add to sheet")
+    
+    # Get the next available row
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range='A:A'
+        ).execute()
+        values = result.get('values', [])
+        next_row = len(values) + 1
+    except:
+        next_row = 2  # Default to row 2 if error
+    
+    # Prepare data for batch insert
+    rows_to_add = []
+    added_count = 0
+    
+    for email in application_emails:
+        company = email.get('company', 'Unknown Company')
+        position = email.get('position', 'Unknown Position')
+        
+        # Parse date (basic formatting)
+        try:
+            date_applied = datetime.now().strftime('%Y-%m-%d')  # Use today's date as fallback
+        except:
+            date_applied = 'Unknown Date'
+        
+        status = 'Applied'  # Default status for application emails
+        follow_up = ''  # Empty by default
+        
+        # Only add if we have at least a company name
+        if company and company != 'Unknown Company':
+            row_data = [company, position, date_applied, status, follow_up]
+            rows_to_add.append(row_data)
+            added_count += 1
+            
+            print(f"   ✅ Adding: {company} - {position}")
+        else:
+            print(f"   ❌ Skipping: No company found for email from {email.get('sender', 'Unknown')}")
+    
+    if not rows_to_add:
+        print("❌ No valid applications to add (no companies extracted)")
+        return {'total': len(job_emails), 'applications': len(application_emails), 'added': 0}
+    
+    # Batch insert all rows
+    try:
+        range_name = f'A{next_row}:E{next_row + len(rows_to_add) - 1}'
+        body = {'values': rows_to_add}
+        
+        result = service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption='RAW',
+            body=body
+        ).execute()
+        
+        print(f"✅ Successfully added {added_count} job applications to the sheet!")
+        
+        return {
+            'total': len(job_emails),
+            'applications': len(application_emails),
+            'added': added_count
+        }
+        
+    except Exception as e:
+        print(f"❌ Error adding to sheet: {e}")
+        return {'total': len(job_emails), 'applications': len(application_emails), 'added': 0}
+
+
+def get_user_email_from_credentials():
+    """Get user email from stored credentials"""
+    try:
+        token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tokens', 'token.pickle')
+        if os.path.exists(token_path):
+            with open(token_path, 'rb') as token:
+                creds = pickle.load(token)
+                if creds and creds.valid:
+                    # Build Gmail service to get user email
+                    gmail_service = build('gmail', 'v1', credentials=creds)
+                    profile = gmail_service.users().getProfile(userId='me').execute()
+                    return profile.get('emailAddress')
+    except Exception as e:
+        print(f"❌ Error getting user email: {e}")
+    return None
+
 def main():
-    """Story 2.1: Create Google Sheet for new user with database tracking"""
-    print("🚀 Story 2.1: Checking user status and managing sheets...")
+    """Main function to demonstrate adding application emails to sheet"""
+    print("📊 Job Application Email to Sheet Processor")
+    print("=" * 50)
     
-    # Initialize database
-    print("📋 Initializing database...")
-    if not init_database():
-        print("❌ Failed to initialize database")
-        return
-    
-    # Step 1: Authenticate and get credentials
+    # Authenticate with Google Sheets
     service = authenticate_sheets()
     if not service:
-        print("❌ Authentication failed. Make sure to run gmail_auth.py first.")
+        print("❌ Failed to authenticate with Google Sheets")
         return
     
-    # Load credentials for user info
-    token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tokens', 'token.pickle')
-    with open(token_path, 'rb') as token:
-        credentials = pickle.load(token)
+    # Get user email from credentials
+    user_email = get_user_email_from_credentials()
+    if not user_email:
+        print("❌ Could not determine user email from credentials")
+        return
     
-    # Step 2: Get user email and check if they exist
-    user_email = get_user_email(credentials)
-    print(f"👤 User: {user_email}")
+    print(f"📧 User: {user_email}")
     
-    # Step 3: Check if user exists in database (Story 2.1 core logic)
+    # Check if user exists and get their sheet ID
     if user_exists(user_email):
-        print("📋 Returning user - user already exists in database")
-        print("✅ Story 2.1 Complete: Existing user detected!")
-    else:
-        print("🆕 First-time user - creating new sheet and saving to database")
-        
-        try:
-            # Create new sheet for first-time user
-            spreadsheet_id, spreadsheet_url = create_job_tracker_sheet(service)
+        spreadsheet_id = get_user_sheet_id(user_email)
+        if spreadsheet_id:
+            print(f"✅ Found existing sheet ID: {spreadsheet_id}")
+        else:
+            print("⚠️  User exists but no sheet ID found. Creating new sheet...")
+            # Create a new sheet for the user - need to get credentials first
+            token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tokens', 'token.pickle')
+            with open(token_path, 'rb') as token:
+                creds = pickle.load(token)
             
-            # Set up headers
-            setup_sheet_headers(service, spreadsheet_id)
-            
-            # Add test data for new user
-            add_test_data(service, spreadsheet_id)
-            
-            # Save user to database
-            if save_new_user(user_email, spreadsheet_id):
-                print(f"✅ Saved new user to database: {user_email}")
-                print(f"📋 Sheet URL: {spreadsheet_url}")
-                print("\n✅ Story 2.1 Complete: Created new sheet for first-time user!")
+            service_new, spreadsheet_id, spreadsheet_url = create_job_tracker_sheet(creds)
+            if spreadsheet_id:
+                # Update the database with the new sheet ID
+                if update_user_sheet_id(user_email, spreadsheet_id):
+                    print(f"✅ Created new sheet and updated database: {spreadsheet_id}")
+                else:
+                    print("⚠️  Sheet created but failed to update database")
             else:
-                print("❌ Failed to save user to database")
-                
-        except Exception as e:
-            print(f"❌ Failed to create sheet for new user: {e}")
-            return
+                print("❌ Failed to create new sheet")
+                return
+    else:
+        print("❌ User not found in database. Please run gmail_auth.py first to set up your account.")
+        return
+    
+    if not spreadsheet_id:
+        print("❌ No spreadsheet ID available")
+        return
+    
+    # Process emails and add to sheet
+    results = add_application_emails_to_sheet(service, spreadsheet_id, max_emails=20)
+    
+    # Display summary
+    print(f"\n📊 PROCESSING SUMMARY:")
+    print(f"   📧 Total emails found: {results['total']}")
+    print(f"   📝 Application emails: {results['applications']}")
+    print(f"   ✅ Added to sheet: {results['added']}")
+    
+    if results['added'] > 0:
+        print(f"\n🎉 Successfully processed job applications!")
+    else:
+        print(f"\n⚠️  No applications were added to the sheet.")
+
 
 if __name__ == '__main__':
     main()
