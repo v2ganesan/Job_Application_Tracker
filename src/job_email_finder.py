@@ -5,6 +5,9 @@ import pickle
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 
+# Import our extraction functions
+from utils import extract_company, extract_position
+
 # Load environment variables
 load_dotenv()
 
@@ -159,12 +162,9 @@ def get_gmail_service():
         return None
 
 def build_job_search_query():
-    """Build Gmail search query for job-related emails in both subject and body"""
-    all_keywords = []
-    
-    # Flatten all keywords from all categories
-    for category, keywords in JOB_KEYWORDS.items():
-        all_keywords.extend(keywords)
+    """Build Gmail search query for application emails only"""
+    # Only use application keywords, not all job keywords
+    all_keywords = JOB_KEYWORDS['application']
     
     # Build search queries for both subject and body content
     search_queries = []
@@ -178,8 +178,8 @@ def build_job_search_query():
     return query
 
 def find_job_emails(max_results=20):
-    """Find job application emails based on subject line keywords"""
-    print("🔍 Searching for job application emails...")
+    """Find confirmed job application emails based on application keywords"""
+    print("🔍 Searching for confirmed job application emails...")
     
     service = get_gmail_service()
     if not service:
@@ -204,14 +204,24 @@ def find_job_emails(max_results=20):
             return []
         
         print(f"✅ Found {len(messages)} potential job emails")
+        print(f"🔄 Processing emails and extracting company/position info...")
         
-        # Get detailed info for each email
+        # Get detailed info for each email with progress indicators
         job_emails = []
-        for msg in messages:
+        for i, msg in enumerate(messages, 1):
+            print(f"   Processing email {i}/{len(messages)}... ", end='', flush=True)
+            
             email_details = get_email_details(service, msg['id'])
             if email_details:
                 job_emails.append(email_details)
+                # Show what we extracted
+                company = email_details.get('company', 'None')
+                position = email_details.get('position', 'None')
+                print(f"✅ Company: {company}, Position: {position}")
+            else:
+                print("❌ Skipped (non-job email)")
         
+        print(f"\n🎉 Completed processing {len(job_emails)} job emails!")
         return job_emails
         
     except Exception as e:
@@ -241,13 +251,23 @@ def get_email_details(service, message_id):
         # Extract email body for better classification
         body_text = extract_email_body(msg_data)
         
+        # Extract company and position using our functions
+        company = extract_company(sender=sender, subject=subject)
+        position = extract_position(
+            body=body_text,
+            preview=body_text[:200] if body_text else None,
+            subject=subject
+        )
+        
         return {
             'id': message_id,
             'subject': subject,
             'sender': sender,
             'date': date,
             'body_snippet': body_text[:500] if body_text else '',  # First 500 chars for preview
-            'category': classify_job_email_with_body(subject, body_text)
+            'category': classify_job_email_with_body(subject, body_text),
+            'company': company,
+            'position': position
         }
         
     except Exception as e:
@@ -417,7 +437,7 @@ def main():
     print("=" * 60)
     
     # Find job emails (increased limit to get more emails for categorization)
-    job_emails = find_job_emails(max_results=200)
+    job_emails = find_job_emails(max_results=20)
     
     if not job_emails:
         print("No job application emails found.")
@@ -457,14 +477,32 @@ def main():
             print(f"\n{emoji_map[category]} {category.upper()} EMAILS ({len(emails)} total)")
             print("-" * 40)
             
-            # Show ALL emails from each category
+            # Show ALL emails from each category with extracted info
             for i, email in enumerate(emails):
                 print(f"{i+1}. From: {email['sender']}")
                 print(f"   Subject: {email['subject']}")
                 print(f"   Date: {email['date']}")
+                
+                # Display extracted company and position
+                company_status = "✅" if email.get('company') else "❌"
+                position_status = "✅" if email.get('position') else "❌"
+                
+                print(f"   {company_status} Company: {email.get('company', 'Not found')}")
+                print(f"   {position_status} Position: {email.get('position', 'Not found')}")
                 print()
     
-    print(f"\n✅ Email categorization complete!")
+    # Calculate extraction statistics
+    total_emails = len(job_emails)
+    successful_companies = sum(1 for email in job_emails if email.get('company'))
+    successful_positions = sum(1 for email in job_emails if email.get('position'))
+    
+    print(f"\n📊 EXTRACTION SUMMARY:")
+    print("=" * 40)
+    print(f"Total emails processed: {total_emails}")
+    print(f"✅ Company extraction: {successful_companies}/{total_emails} ({successful_companies/total_emails*100:.1f}%)")
+    print(f"✅ Position extraction: {successful_positions}/{total_emails} ({successful_positions/total_emails*100:.1f}%)")
+    
+    print(f"\n✅ Email categorization and extraction complete!")
 
 if __name__ == '__main__':
     main()
