@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.database import user_exists, save_new_user, init_database
+from src.sheets_service import create_job_tracker_sheet, setup_sheet_headers
 
 # Load environment variables
 load_dotenv()
@@ -109,65 +110,6 @@ def get_user_email(credentials):
     oauth_service = build('oauth2', 'v2', credentials=credentials)
     user_info = oauth_service.userinfo().get().execute()
     return user_info.get('email')
-
-def create_job_tracker_sheet(credentials):
-    """Create a new spreadsheet for job application tracking"""
-    service = build('sheets', 'v4', credentials=credentials)
-    
-    spreadsheet = {
-        'properties': {
-            'title': 'Job Application Tracker'
-        }
-    }
-    
-    spreadsheet = service.spreadsheets().create(body=spreadsheet, fields='spreadsheetId,spreadsheetUrl').execute()
-    spreadsheet_id = spreadsheet.get('spreadsheetId')
-    spreadsheet_url = spreadsheet.get('spreadsheetUrl')
-    
-    print(f"✅ Created spreadsheet: 'Job Application Tracker'")
-    print(f"📋 Spreadsheet URL: {spreadsheet_url}")
-    
-    return service, spreadsheet_id, spreadsheet_url
-
-def setup_sheet_headers(service, spreadsheet_id):
-    """Add headers to the job tracker spreadsheet"""
-    headers = [
-        'Company', 'Position', 'Date Applied', 'Status', 
-        'Follow-up Date'
-    ]
-    
-    values = [headers]
-    body = {'values': values}
-    
-    service.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id,
-        range='A1:E1',
-        valueInputOption='RAW',
-        body=body
-    ).execute()
-    
-    # Format headers (bold)
-    format_request = {
-        'requests': [{
-            'repeatCell': {
-                'range': {
-                    'sheetId': 0, 'startRowIndex': 0, 'endRowIndex': 1,
-                    'startColumnIndex': 0, 'endColumnIndex': 5
-                },
-                'cell': {
-                    'userEnteredFormat': {'textFormat': {'bold': True}}
-                },
-                'fields': 'userEnteredFormat.textFormat.bold'
-            }
-        }]
-    }
-    
-    service.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body=format_request
-    ).execute()
-    
-    print(f"✅ Added headers: {' | '.join(headers)}")
 
 def handle_first_time_user(credentials, user_email):
     """Handle first-time user setup - create sheet and save to database"""
